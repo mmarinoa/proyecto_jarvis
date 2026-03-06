@@ -1,0 +1,129 @@
+
+import pyttsx3
+import speech_recognition as sr
+import sounddevice as sd
+import soundfile as sf
+import numpy as np
+import time
+
+# Inicializar motor de síntesis de voz
+engine = pyttsx3.init()
+
+def escuchar_audio(duracion=5, fs=16000):
+    """Captura audio del micrófono usando sounddevice"""
+    print("Escuchando...")
+    audio = sd.rec(int(duracion * fs), samplerate=fs, channels=1, dtype='float32')
+    sd.wait()
+    return audio, fs
+
+def reconocer_voz():
+    """Reconoce voz del usuario y retorna el texto"""
+    r = sr.Recognizer()
+    try:
+        # Capturar audio con sounddevice
+        audio_data, fs = escuchar_audio(duracion=5)
+        
+        # Convertir a AudioData para SpeechRecognition
+        audio_data_int = (audio_data * 32767).astype(np.int16)
+        audio = sr.AudioData(audio_data_int.tobytes(), fs, 2)
+        
+        # Reconocer con Google
+        texto = r.recognize_google(audio, language='es-ES')
+        print(f"Dijiste: {texto}")
+        return texto
+    except sr.UnknownValueError:
+        print("No te entendi, vocaliza mejor")
+        return None
+    except sr.RequestError as e:
+        print(f"Error de conexión: {e}")
+        return None
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+
+class SpeechModule:
+    def __init__(self, voice=0, volume=1, rate=125):
+        self.engine = pyttsx3.init()
+        self.engine.setProperty('volume', volume)
+        self.engine.setProperty('rate', rate)
+
+        voices = self.engine.getProperty('voices')
+        self.engine.setProperty('voice', voices[voice].id)
+
+    def talk(self, text):
+        try:
+            print(f"[Jarvis habla]: {text}")
+            self.engine.say(text)
+            self.engine.runAndWait()
+            time.sleep(0.5)  # Pequeña pausa después de hablar
+        except Exception as e:
+            print(f"Error al hablar: {e}")
+
+class VoiceRecognitionModule:
+    def __init__(self, key=None):
+        self.key = key
+        self.recognizer = sr.Recognizer()
+    
+    def listen_with_sounddevice(self, duration=5):
+        """Escucha usando sounddevice"""
+        audio_data, fs = escuchar_audio(duracion=duration)
+        audio_data_int = (audio_data * 32767).astype(np.int16)
+        audio = sr.AudioData(audio_data_int.tobytes(), fs, 2)
+        return audio
+
+    def recognize(self, audio=None):
+        """Reconoce voz del usuario"""
+        try:
+            if audio is None:
+                # Capturar audio con sounddevice
+                audio = self.listen_with_sounddevice(duration=5)
+            
+            # Reconocer con Google
+            text = self.recognizer.recognize_google(audio, language='es-ES')
+            return text
+        except sr.UnknownValueError:
+            print("No te entendi, vocaliza mejor")
+            return None
+        except sr.RequestError as e:
+            print(f"Error de conexión: {e}")
+            return None
+        except Exception as e:
+            print(f"Error: {e}")
+            return None
+        
+
+
+
+# Inicializar módulos
+speech = SpeechModule()
+recognition = VoiceRecognitionModule()
+
+# Saludo inicial
+print("=" * 50)
+speech.talk("Hola, soy Jarvis, tu asistente virtual")
+print("=" * 50)
+
+# Bucle principal infinito
+try:
+    while True:
+        speech.talk("Por favor, habla algo")
+        time.sleep(1)  # Pausa para que el usuario esté listo
+        
+        print("\nEscuchando tu voz...")
+        
+        # Escuchar y reconocer
+        text = recognition.recognize()
+        
+        if text:
+            print(f"Dijiste: {text}")
+            time.sleep(0.5)  # Pausa después de escuchar
+            speech.talk(f"Repito: {text}")
+        else:
+            speech.talk("No capté lo que dijiste, intenta de nuevo")
+        
+        time.sleep(1)
+        
+except KeyboardInterrupt:
+    print("\n")
+    speech.talk("Hasta luego")
+    print("¡Hasta luego!")
