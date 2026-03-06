@@ -15,9 +15,9 @@ def hablar(texto):
     print(f"[Jarvis]: {texto}")
     try:
 
-
+        
         # Generar audio con gTTS
-        tts = gTTS(text="tlabaja", lang='es', slow=False)
+        tts = gTTS(text=texto, lang='es', slow=False)
 
         # Guardar en archivo temporal mp3
         mp3_path = os.path.join(tempfile.gettempdir(), f"jarvis_{int(time.time()*1000)}.mp3")

@@ -1,129 +1,185 @@
-
-import pyttsx3
 import speech_recognition as sr
 import sounddevice as sd
-import soundfile as sf
 import numpy as np
 import time
+import subprocess
+import sys
+import threading
 
-# Inicializar motor de síntesis de voz
-engine = pyttsx3.init()
-
-def escuchar_audio(duracion=5, fs=16000):
-    """Captura audio del micrófono usando sounddevice"""
-    print("Escuchando...")
-    audio = sd.rec(int(duracion * fs), samplerate=fs, channels=1, dtype='float32')
-    sd.wait()
-    return audio, fs
-
-def reconocer_voz():
-    """Reconoce voz del usuario y retorna el texto"""
-    r = sr.Recognizer()
-    try:
-        # Capturar audio con sounddevice
-        audio_data, fs = escuchar_audio(duracion=5)
-        
-        # Convertir a AudioData para SpeechRecognition
-        audio_data_int = (audio_data * 32767).astype(np.int16)
-        audio = sr.AudioData(audio_data_int.tobytes(), fs, 2)
-        
-        # Reconocer con Google
-        texto = r.recognize_google(audio, language='es-ES')
-        print(f"Dijiste: {texto}")
-        return texto
-    except sr.UnknownValueError:
-        print("No te entendi, vocaliza mejor")
-        return None
-    except sr.RequestError as e:
-        print(f"Error de conexión: {e}")
-        return None
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
-
+# ─────────────────────────────────────────
+# MÓDULO DE VOZ  (pyttsx3 con fallback a espeak)
+# ─────────────────────────────────────────
 class SpeechModule:
-    def __init__(self, voice=0, volume=1, rate=125):
-        self.engine = pyttsx3.init()
-        self.engine.setProperty('volume', volume)
-        self.engine.setProperty('rate', rate)
+    def __init__(self, rate=125, volume=1.0):
+        self.rate = rate
+        self.volume = volume
+        self.engine = None
+        self._usar_espeak = False
+        self._init_engine()
 
-        voices = self.engine.getProperty('voices')
-        self.engine.setProperty('voice', voices[voice].id)
+    def _init_engine(self):
+        """Intenta inicializar pyttsx3; si falla, usa espeak directamente."""
+        try:
+            import pyttsx3
+            # Crear el engine en un hilo propio para evitar conflictos de loop
+            self.engine = pyttsx3.init()
+            self.engine.setProperty('rate', self.rate)
+            self.engine.setProperty('volume', self.volume)
+
+            voices = self.engine.getProperty('voices')
+            # Buscar voz en español si existe
+            voz_es = next((v for v in voices if 'es' in v.id.lower()), None)
+            if voz_es:
+                self.engine.setProperty('voice', voz_es.id)
+            elif voices:
+                self.engine.setProperty('voice', voices[0].id)
+
+            # Test rápido para verificar que funciona
+            self.engine.say(' ')
+            self.engine.runAndWait()
+            print("[TTS] Motor pyttsx3 iniciado correctamente")
+
+        except Exception as e:
+            print(f"[TTS] pyttsx3 no disponible ({e}), usando espeak como fallback")
+            self.engine = None
+            self._usar_espeak = True
 
     def talk(self, text):
+        """Reproduce texto en voz alta de forma bloqueante."""
+        print(f"[Jarvis]: {text}")
+        if self._usar_espeak:
+            self._hablar_espeak(text)
+        else:
+            self._hablar_pyttsx3(text)
+
+    def _hablar_pyttsx3(self, text):
+        """Usa pyttsx3 en un hilo limpio para evitar RuntimeError de loop."""
+        resultado = {'error': None}
+
+        def _run():
+            try:
+                import pyttsx3
+                # Crear un engine NUEVO por cada llamada evita el error de loop
+                eng = pyttsx3.init()
+                eng.setProperty('rate', self.rate)
+                eng.setProperty('volume', self.volume)
+                voices = eng.getProperty('voices')
+                voz_es = next((v for v in voices if 'es' in v.id.lower()), None)
+                if voz_es:
+                    eng.setProperty('voice', voz_es.id)
+                elif voices:
+                    eng.setProperty('voice', voices[0].id)
+                eng.say(text)
+                eng.runAndWait()
+                eng.stop()
+            except Exception as e:
+                resultado['error'] = e
+
+        hilo = threading.Thread(target=_run, daemon=True)
+        hilo.start()
+        hilo.join(timeout=15)  # Máximo 15s de espera
+
+        if resultado['error']:
+            print(f"[TTS] Error pyttsx3, cambiando a espeak: {resultado['error']}")
+            self._usar_espeak = True
+            self._hablar_espeak(text)
+
+    def _hablar_espeak(self, text):
+        """Fallback: llama a espeak directamente por terminal."""
         try:
-            print(f"[Jarvis habla]: {text}")
-            self.engine.say(text)
-            self.engine.runAndWait()
-            time.sleep(0.5)  # Pequeña pausa después de hablar
+            subprocess.run(
+                ['espeak-ng', '-v', 'es', '-s', str(self.rate), text],
+                check=True, capture_output=True
+            )
+        except FileNotFoundError:
+            try:
+                subprocess.run(
+                    ['espeak', '-v', 'es', '-s', str(self.rate), text],
+                    check=True, capture_output=True
+                )
+            except FileNotFoundError:
+                print("[TTS ERROR] Ni pyttsx3 ni espeak/espeak-ng están disponibles.")
+                print("  → En Ubuntu/Debian instala con: sudo apt install espeak-ng")
+                print("  → En Windows instala: https://espeak-ng.org/")
         except Exception as e:
-            print(f"Error al hablar: {e}")
+            print(f"[TTS ERROR] espeak falló: {e}")
 
+
+# ─────────────────────────────────────────
+# MÓDULO DE RECONOCIMIENTO DE VOZ
+# ─────────────────────────────────────────
 class VoiceRecognitionModule:
-    def __init__(self, key=None):
-        self.key = key
+    def __init__(self, duracion=5, fs=16000):
+        self.duracion = duracion
+        self.fs = fs
         self.recognizer = sr.Recognizer()
-    
-    def listen_with_sounddevice(self, duration=5):
-        """Escucha usando sounddevice"""
-        audio_data, fs = escuchar_audio(duracion=duration)
-        audio_data_int = (audio_data * 32767).astype(np.int16)
-        audio = sr.AudioData(audio_data_int.tobytes(), fs, 2)
-        return audio
 
-    def recognize(self, audio=None):
-        """Reconoce voz del usuario"""
+    def _capturar_audio(self):
+        """Captura audio con sounddevice y lo convierte a AudioData."""
+        print("  🎙️  Hablando ahora...")
+        audio_raw = sd.rec(
+            int(self.duracion * self.fs),
+            samplerate=self.fs,
+            channels=1,
+            dtype='float32'
+        )
+        sd.wait()
+        # Normalizar y convertir a int16
+        audio_int16 = (audio_raw * 32767).astype(np.int16)
+        return sr.AudioData(audio_int16.tobytes(), self.fs, 2)
+
+    def recognize(self):
+        """Escucha y retorna el texto reconocido, o None si falla."""
         try:
-            if audio is None:
-                # Capturar audio con sounddevice
-                audio = self.listen_with_sounddevice(duration=5)
-            
-            # Reconocer con Google
-            text = self.recognizer.recognize_google(audio, language='es-ES')
-            return text
+            audio = self._capturar_audio()
+            texto = self.recognizer.recognize_google(audio, language='es-ES')
+            return texto
         except sr.UnknownValueError:
-            print("No te entendi, vocaliza mejor")
+            print("  ❌ No te entendí, vocaliza mejor")
             return None
         except sr.RequestError as e:
-            print(f"Error de conexión: {e}")
+            print(f"  ❌ Error de conexión con Google: {e}")
             return None
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"  ❌ Error inesperado: {e}")
             return None
-        
 
 
+# ─────────────────────────────────────────
+# PROGRAMA PRINCIPAL
+# ─────────────────────────────────────────
+def main():
+    print("=" * 50)
+    print("  JARVIS - Asistente Virtual")
+    print("=" * 50)
 
-# Inicializar módulos
-speech = SpeechModule()
-recognition = VoiceRecognitionModule()
+    speech = SpeechModule(rate=130)
+    recognition = VoiceRecognitionModule(duracion=5)
 
-# Saludo inicial
-print("=" * 50)
-speech.talk("Hola, soy Jarvis, tu asistente virtual")
-print("=" * 50)
+    speech.talk("Hola, soy Jarvis, tu asistente virtual")
 
-# Bucle principal infinito
-try:
-    while True:
-        speech.talk("Por favor, habla algo")
-        time.sleep(1)  # Pausa para que el usuario esté listo
-        
-        print("\nEscuchando tu voz...")
-        
-        # Escuchar y reconocer
-        text = recognition.recognize()
-        
-        if text:
-            print(f"Dijiste: {text}")
-            time.sleep(0.5)  # Pausa después de escuchar
-            speech.talk(f"Repito: {text}")
-        else:
-            speech.talk("No capté lo que dijiste, intenta de nuevo")
-        
-        time.sleep(1)
-        
-except KeyboardInterrupt:
-    print("\n")
-    speech.talk("Hasta luego")
-    print("¡Hasta luego!")
+    try:
+        while True:
+            print("\n" + "-" * 40)
+            speech.talk("Por favor, habla algo")
+            time.sleep(0.5)
+
+            texto = recognition.recognize()
+
+            if texto:
+                print(f"  ✅ Dijiste: {texto}")
+                speech.talk(f"Dijiste: {texto}")
+            else:
+                speech.talk("No capté lo que dijiste, intenta de nuevo")
+
+            time.sleep(0.8)
+
+    except KeyboardInterrupt:
+        print("\n\n[Saliendo...]")
+        speech.talk("Hasta luego")
+        print("¡Hasta luego!")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
