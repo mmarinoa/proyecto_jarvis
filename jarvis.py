@@ -14,7 +14,7 @@ import requests
 import os
 
 # ── Configuración ──────────────────────────────────────────
-N8N_WEBHOOK_URL = "https://an8n.ilatina.es/webhook/jarvis"  # <-- Cambia esto por tu URL de n8n
+N8N_WEBHOOK_URL = "https://an8n.ilatina.es/webhook/jarvis"  
 # ───────────────────────────────────────────────────────────
 
 
